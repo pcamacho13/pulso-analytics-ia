@@ -1,0 +1,25 @@
+# Entorno virtual
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos de configuración locales
+.env
+*.env
+
+# Archivos de datos locales (ejemplos / pruebas)
+data/
+datasets/*
+
+# Pero SÍ queremos que exista la carpeta datasets
+!datasets/.gitkeep
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
