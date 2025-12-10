@@ -14,7 +14,7 @@ __pycache__/
 
 # Archivos de datos locales (ejemplos / pruebas)
 data/
-datasets/*
+
 
 # Pero SÍ queremos que exista la carpeta datasets
 !datasets/.gitkeep
