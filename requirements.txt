@@ -3,5 +3,6 @@ uvicorn[standard]
 pandas
 openpyxl
 python-multipart
+requests
 openai
 
