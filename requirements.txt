@@ -6,5 +6,5 @@ python-multipart
 requests
 openai
 google-api-python-client
-
+itsdangerous
 
