@@ -1,21 +1,31 @@
-from fastapi import FastAPI, UploadFile, File, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-import pandas as pd
-import io
 import os
+import io
 from typing import List, Optional
+
+import pandas as pd
+import requests
+
+from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from starlette.middleware.sessions import SessionMiddleware
+
+from pydantic import BaseModel
+
 from openai import OpenAI
+
 from data_loader import (
     DATA_PATH,
     DATASETS_DIR,
     load_excel_to_tables,
     load_tables_for_dataset_id,
+    load_tables_from_drive_dataset,
 )
 
 client = OpenAI()
+
 
 # Límites para que el contexto que se envía al modelo sea ligero
 MAX_TABLES_FOR_PROMPT = 3      # máx. hojas que se describen
@@ -24,15 +34,230 @@ MAX_ROWS_PER_TABLE = 2         # máx. filas de ejemplo por hoja
 
 # ---------- CONFIGURACIÓN BÁSICA ----------
 
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+
 app = FastAPI(
-    title="Pulso Analytics IA",
-    docs_url=None,
-    redoc_url=None
+    docs_url="/docs" if ENVIRONMENT != "production" else None,
+    redoc_url=None,
+)
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("APP_SECRET_KEY", "dev-secret-key"),
+    session_cookie="pulso_analytics_session",
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 client = OpenAI()
+
+# =========================
+# Configuración de Google OAuth y acceso permitido
+# =========================
+
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+
+ALLOWED_DOMAIN = os.environ.get("ALLOWED_DOMAIN", "pulsoinmobiliario.com")
+ALLOWED_EMAILS_RAW = os.environ.get("ALLOWED_EMAILS", "")
+
+ALLOWED_EMAILS = [
+    email.strip().lower()
+    for email in ALLOWED_EMAILS_RAW.split(",")
+    if email.strip()
+]
+
+GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo"
+
+
+def is_email_allowed(email: str) -> bool:
+    """
+    Valida que el correo:
+    1) Sea del dominio configurado (por defecto pulsoinmobiliario.com)
+    2) Esté en la lista blanca ALLOWED_EMAILS (si la lista no está vacía)
+    """
+    email = email.lower()
+
+    # 1) Validar dominio
+    if not email.endswith(f"@{ALLOWED_DOMAIN}"):
+        return False
+
+    # 2) Validar lista blanca (si hay correos configurados)
+    if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
+        return False
+
+    return True
+
+
+def require_auth(request: Request):
+    """
+    Dependencia para proteger endpoints.
+    Lanza 401 si el usuario no está autenticado.
+    """
+    if not request.session.get("authenticated"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+# =========================
+# Rutas de autenticación con Google
+# =========================
+
+@app.get("/auth/google/login")
+def google_login(request: Request):
+    """
+    Redirige al usuario a Google para iniciar sesión.
+    """
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        return HTMLResponse(
+            "Error de configuración: faltan GOOGLE_CLIENT_ID o GOOGLE_CLIENT_SECRET.",
+            status_code=500,
+        )
+
+    redirect_uri = request.url_for("google_callback")
+
+    from urllib.parse import urlencode
+
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "redirect_uri": str(redirect_uri),
+        "access_type": "online",
+        "prompt": "select_account",
+        "include_granted_scopes": "true",
+    }
+
+    url = f"{GOOGLE_AUTH_ENDPOINT}?{urlencode(params)}"
+    return RedirectResponse(url)
+
+
+@app.get("/auth/google/callback")
+def google_callback(request: Request):
+    """
+    Ruta a la que Google redirige después del login.
+    Intercambia el 'code' por tokens y obtiene el email del usuario.
+    """
+    code = request.query_params.get("code")
+    error = request.query_params.get("error")
+
+    if error:
+        return HTMLResponse(f"Error de Google OAuth: {error}", status_code=400)
+
+    if not code:
+        return HTMLResponse("No se recibió el código de autorización.", status_code=400)
+
+    redirect_uri = request.url_for("google_callback")
+
+    # 1) Intercambiar código por tokens
+    data = {
+        "code": code,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": str(redirect_uri),
+        "grant_type": "authorization_code",
+    }
+
+    token_resp = requests.post(GOOGLE_TOKEN_ENDPOINT, data=data)
+    if token_resp.status_code != 200:
+        return HTMLResponse(
+            f"Error al obtener tokens de Google: {token_resp.text}",
+            status_code=500,
+        )
+
+    tokens = token_resp.json()
+    access_token = tokens.get("access_token")
+
+    if not access_token:
+        return HTMLResponse(
+            "No se obtuvo access_token en la respuesta de Google.",
+            status_code=500,
+        )
+
+    # 2) Obtener datos del usuario
+    headers = {"Authorization": f"Bearer {access_token}"}
+    userinfo_resp = requests.get(GOOGLE_USERINFO_ENDPOINT, headers=headers)
+
+    if userinfo_resp.status_code != 200:
+        return HTMLResponse(
+            f"Error al obtener información del usuario: {userinfo_resp.text}",
+            status_code=500,
+        )
+
+    userinfo = userinfo_resp.json()
+    email = userinfo.get("email")
+    name = userinfo.get("name")
+
+    if not email:
+        return HTMLResponse(
+            "No se obtuvo el correo electrónico del usuario.",
+            status_code=500,
+        )
+
+    # 3) Validar dominio + lista blanca
+    if not is_email_allowed(email):
+        return HTMLResponse(
+            f"Tu cuenta ({email}) no está autorizada para acceder a Pulso Analytics IA.",
+            status_code=403,
+        )
+
+    # 4) Crear sesión
+    request.session["authenticated"] = True
+    request.session["user_email"] = email
+    request.session["user_name"] = name
+
+    # Redirigir a la página principal
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.get("/logout")
+def logout(request: Request):
+    """
+    Cierra la sesión y redirige al login con Google.
+    """
+    request.session.clear()
+    return RedirectResponse(url="/auth/google/login", status_code=303)
+
+# =========================
+# Ruta de DEBUG para probar lectura desde Google Drive
+# =========================
+
+@app.get("/debug/drive-dataset/{dataset_id}")
+def debug_drive_dataset(
+    dataset_id: str,
+    _auth: None = Depends(require_auth),
+):
+    """
+    Ruta de prueba para verificar que podemos leer un dataset desde Google Drive.
+
+    - Usa load_tables_from_drive_dataset(dataset_id).
+    - Regresa el listado de hojas y el número de filas/columnas de cada una.
+    """
+    try:
+        tables = load_tables_from_drive_dataset(dataset_id)
+    except Exception as e:
+        # En caso de error, regresamos el mensaje para diagnosticar
+        return JSONResponse(
+            {"ok": False, "error": str(e)},
+            status_code=500,
+        )
+
+    summary = {}
+    for sheet_name, df in tables.items():
+        summary[sheet_name] = {
+            "rows": int(len(df)),
+            "columns": int(len(df.columns)),
+            "columns_names": list(df.columns.astype(str)),
+        }
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "dataset_id": dataset_id,
+            "sheets": summary,
+        }
+    )
+
 
 @app.get("/docs", response_class=HTMLResponse)
 async def pulso_analytics_ui(request: Request):
@@ -353,6 +578,15 @@ async def pulso_analytics_ui(request: Request):
 </html>"""
     return HTMLResponse(content=html_content)
 
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    # Validación: si no hay sesión, mandar al login con Google
+    if not request.session.get("authenticated"):
+        return RedirectResponse(url="/auth/google/login", status_code=303)
+
+    # Si ya está autenticado, mostrar la interfaz actual
+    return await pulso_analytics_ui(request)
+
 
 # ---------- CORS ----------
 
@@ -605,7 +839,11 @@ def list_datasets():
 
 
 @app.post("/upload_excel")
-async def upload_excel(file: UploadFile = File(...)):
+async def upload_excel(
+    file: UploadFile = File(...),
+    _auth: None = Depends(require_auth),
+):
+
     """
     Sube un nuevo archivo Excel con múltiples hojas.
     Reemplaza tables_global (modo antiguo).
@@ -629,7 +867,11 @@ async def upload_excel(file: UploadFile = File(...)):
 
 
 @app.post("/ask", response_model=AskResponse)
-def ask(request: AskRequest):
+def ask(
+    request: AskRequest,
+    _auth: None = Depends(require_auth),
+):
+
     global tables_global
     if not tables_global:
         return AskResponse(answer="No hay datos cargados. Sube un archivo Excel primero.")
@@ -681,7 +923,12 @@ def ask(request: AskRequest):
 
 
 @app.post("/ask/{dataset_id}", response_model=AskResponse)
-def ask_on_dataset(dataset_id: str, request: AskRequest):
+def ask_on_dataset(
+    dataset_id: str,
+    request: AskRequest,
+    _auth: None = Depends(require_auth),
+):
+
     try:
         tables = load_tables_for_dataset_id(dataset_id)
     except Exception as e:
@@ -736,7 +983,11 @@ def ask_on_dataset(dataset_id: str, request: AskRequest):
 
 
 @app.post("/chat", response_model=AskResponse)
-def chat(request: ChatRequest):
+def chat(
+    request: ChatRequest,
+    _auth: None = Depends(require_auth),
+):
+
     ask_request = AskRequest(question=request.query)
 
     if request.dataset_id:
