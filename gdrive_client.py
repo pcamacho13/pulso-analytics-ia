@@ -44,7 +44,8 @@ def download_file_from_drive(file_id: str) -> io.BytesIO:
     """
     service = get_drive_service()
 
-    request = service.files().get_media(fileId=file_id)
+    # IMPORTANTE: supportsAllDrives=True para unidades compartidas
+    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
 
@@ -67,7 +68,11 @@ def download_spreadsheet_as_excel(file_id: str) -> io.BytesIO:
     service = get_drive_service()
 
     # Primero obtenemos el mimeType del archivo
-    file_metadata = service.files().get(fileId=file_id, fields="mimeType").execute()
+    file_metadata = service.files().get(
+        fileId=file_id,
+        fields="mimeType",
+        supportsAllDrives=True,  # <-- clave para unidades compartidas
+    ).execute()
     mime_type = file_metadata.get("mimeType")
 
     # Google Sheets -> exportar como Excel
@@ -77,8 +82,11 @@ def download_spreadsheet_as_excel(file_id: str) -> io.BytesIO:
             mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     else:
-        # Asumimos que es un Excel ya binario
-        request = service.files().get_media(fileId=file_id)
+        # Asumimos que es un Excel ya binario (también en unidad compartida)
+        request = service.files().get_media(
+            fileId=file_id,
+            supportsAllDrives=True,  # <-- también aquí
+        )
 
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
