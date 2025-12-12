@@ -72,13 +72,13 @@ def load_tables_for_dataset_id(dataset_id: str) -> dict[str, pd.DataFrame]:
     # Este punto no debería alcanzarse
     raise ValueError(f"Extensión de archivo no soportada: {selected_ext}")
     
-    def load_tables_from_drive_dataset(dataset_id: str) -> dict:
+def load_tables_from_drive_dataset(dataset_id: str) -> dict:
     """
     Carga un dataset (Excel o Google Sheets) desde Google Drive, usando DATASETS_SPREADSHEETS.
 
     - dataset_id: clave definida en DATASETS_SPREADSHEETS (por ejemplo, "core_mxn").
     - Usa download_spreadsheet_as_excel para obtener un archivo Excel en memoria.
-    - Luego reutiliza pandas.read_excel para convertirlo en tablas (una por hoja).
+    - Luego usa pandas.read_excel para convertirlo en tablas (una por hoja).
     """
     if dataset_id not in DATASETS_SPREADSHEETS:
         raise ValueError(f"Dataset '{dataset_id}' no está configurado en DATASETS_SPREADSHEETS.")
@@ -93,14 +93,10 @@ def load_tables_for_dataset_id(dataset_id: str) -> dict[str, pd.DataFrame]:
     excel_bytes_io = download_spreadsheet_as_excel(file_id)
 
     # Leer todas las hojas del Excel en un dict de DataFrames
-    # sheet_name=None hace que pandas devuelva {nombre_hoja: DataFrame}
     xls = pd.read_excel(excel_bytes_io, sheet_name=None)
 
-    # Si tu función load_excel_to_tables hace más cosas (limpieza, normalización),
-    # podrías reutilizarla aquí. Por ahora, devolvemos el dict tal cual.
     tables = {}
     for sheet_name, df in xls.items():
         tables[sheet_name] = df
 
     return tables
-
