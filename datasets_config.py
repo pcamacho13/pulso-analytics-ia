@@ -39,3 +39,12 @@ DATASETS_DOCUMENTS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+DATASETS_SPREADSHEETS = {
+    "test_noi_ia": {
+        "name": "Finanzas – TEST NOI IA",
+        "drive_file_id": "1HNAMX0wdOj-Lv5sUydk_rFp6Er5U8P4RSjCcILdOX-4",
+    },
+    # el resto...
+}
+
+
