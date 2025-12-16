@@ -49,7 +49,7 @@ DATASETS_SPREADSHEETS = {
 
 DATASETS_SPREADSHEETS = {
     "gestion_personal": {
-        "name": "Gestión de Personal – gestion persona",
+        "name": "Personal – gestion_personal",
         "drive_file_id": "13hRSF7BPFbHWZ16sQgRd8ix8JGxp2JkSPirQQ3ij2bA",
     },
     # el resto...
