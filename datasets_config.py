@@ -47,4 +47,11 @@ DATASETS_SPREADSHEETS = {
     # el resto...
 }
 
+DATASETS_SPREADSHEETS = {
+    "gestion_personal": {
+        "name": "Gestión de Personal – gestion persona",
+        "drive_file_id": "13hRSF7BPFbHWZ16sQgRd8ix8JGxp2JkSPirQQ3ij2bA",
+    },
+    # el resto...
+}
 
