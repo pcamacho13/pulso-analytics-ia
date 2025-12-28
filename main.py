@@ -789,6 +789,9 @@ def generate_pandas_code(question: str, tables: dict[str, pd.DataFrame]) -> str:
             "'Colaborador' u otras similares), NO uses igualdad exacta. "
             "Usa la función smart_filter(df, 'NombreColumna', 'texto_del_usuario') para permitir "
             "coincidencias parciales y tolerancia a errores de escritura.\n"
+            "7.2) IMPORTANTE: smart_filter(df, 'Col', 'texto') REGRESA un DataFrame filtrado. "
+            "NO lo uses dentro de df[...] (ej. NO hagas df[smart_filter(...)]. "
+            "El uso correcto es: df_filtrado = smart_filter(df, 'Col', 'texto') y luego usa df_filtrado.\n"
             "8) NO uses ``` ni bloques de código. SOLO código Python limpio, sin comentarios ni prints."
 
         ),
