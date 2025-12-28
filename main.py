@@ -792,6 +792,10 @@ def generate_pandas_code(question: str, tables: dict[str, pd.DataFrame]) -> str:
             "7.2) IMPORTANTE: smart_filter(df, 'Col', 'texto') REGRESA un DataFrame filtrado. "
             "NO lo uses dentro de df[...] (ej. NO hagas df[smart_filter(...)]. "
             "El uso correcto es: df_filtrado = smart_filter(df, 'Col', 'texto') y luego usa df_filtrado.\n"
+            "7.3) Si el usuario pregunta por personas/colaboradores (por ejemplo nombres) y la(s) tabla(s) seleccionada(s) "
+            "son demográficas o de gestión de personal, responde SOLO con la información disponible en esas tablas "
+            "(puesto, área, fecha, antigüedad, etc.). NO menciones métricas financieras como NOI, GOP, presupuesto, rentas, etc. "
+            "a menos que existan explícitamente en las columnas.\n"
             "8) NO uses ``` ni bloques de código. SOLO código Python limpio, sin comentarios ni prints."
 
         ),
