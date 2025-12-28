@@ -1,5 +1,7 @@
 import os
 import io
+import difflib
+import unicodedata
 from typing import List, Optional
 
 import pandas as pd
@@ -27,6 +29,69 @@ from data_loader import (
 from datasets_config import DATASETS_SPREADSHEETS
 
 client = OpenAI()
+
+def _norm_text(s: str) -> str:
+    """Normaliza texto: minúsculas, sin acentos, sin dobles espacios."""
+    if s is None:
+        return ""
+    s = str(s).strip().lower()
+    s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+    s = " ".join(s.split())
+    return s
+
+
+def best_match(query: str, choices: List[str], cutoff: float = 0.72) -> Optional[str]:
+    """
+    Devuelve el elemento de 'choices' más parecido a 'query' (tolerante a typos).
+    cutoff ~ 0.72 suele funcionar bien para nombres.
+    """
+    if not query or not choices:
+        return None
+
+    qn = _norm_text(query)
+    # Mapa normalizado -> original
+    norm_map = {}
+    norm_list = []
+    for c in choices:
+        cn = _norm_text(c)
+        if cn and cn not in norm_map:
+            norm_map[cn] = c
+            norm_list.append(cn)
+
+    matches = difflib.get_close_matches(qn, norm_list, n=1, cutoff=cutoff)
+    if not matches:
+        return None
+    return norm_map[matches[0]]
+
+
+def smart_filter(df: pd.DataFrame, col: str, query: str) -> pd.DataFrame:
+    """
+    Filtra df por una columna:
+    1) Contiene (case-insensitive, sin acentos)
+    2) Si no hay resultados: usa best_match contra valores únicos y filtra exacto
+    """
+    if col not in df.columns:
+        return df
+
+    qn = _norm_text(query)
+    if not qn:
+        return df
+
+    # 1) contiene (subcadena)
+    series_norm = df[col].astype(str).map(_norm_text)
+    mask_contains = series_norm.str.contains(qn, na=False)
+    hit = df[mask_contains]
+    if not hit.empty:
+        return hit
+
+    # 2) fuzzy contra únicos
+    uniques = df[col].dropna().astype(str).unique().tolist()
+    bm = best_match(query, uniques, cutoff=0.72)
+    if bm:
+        return df[df[col].astype(str) == bm]
+
+    return df
+
 
 ENV = os.getenv("ENV", "local").lower()
 IS_PROD = ENV == "prod"
@@ -720,7 +785,12 @@ def generate_pandas_code(question: str, tables: dict[str, pd.DataFrame]) -> str:
             "6) El resultado final debe quedar en una variable llamada 'result'.\n"
             "7) Si la combinación de filtros que pide el usuario NO existe, "
             "define 'result' como una cadena de texto explicando que no hay datos.\n"
+            "7.1) Para filtros por TEXTO (por ejemplo columnas como 'Inmueble', 'Ubicación', 'Nombre', "
+            "'Colaborador' u otras similares), NO uses igualdad exacta. "
+            "Usa la función smart_filter(df, 'NombreColumna', 'texto_del_usuario') para permitir "
+            "coincidencias parciales y tolerancia a errores de escritura.\n"
             "8) NO uses ``` ni bloques de código. SOLO código Python limpio, sin comentarios ni prints."
+
         ),
     }
 
@@ -900,7 +970,11 @@ def ask(
     except Exception as e:
         return AskResponse(answer=f"Error generando código: {e}")
 
-    safe_globals = {"pd": pd}
+    safe_globals = {
+    "pd": pd,
+    "smart_filter": smart_filter,
+    "best_match": best_match,
+}
     safe_locals = {"tables": {name: df.copy() for name, df in tables_global.items()}}
 
     try:
