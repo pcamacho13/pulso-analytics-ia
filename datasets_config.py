@@ -10,26 +10,35 @@ from typing import Dict, Any
 # ===============================
 # Datasets numéricos (Excel / Google Sheets)
 # ===============================
-# Clave del dict = dataset_id que usarás en la URL y en la app
-# drive_file_id = ID del archivo en Google Drive
 
 DATASETS_SPREADSHEETS: Dict[str, Dict[str, Any]] = {
-    "noi_inmuebles": {
-        "name": "Finanzas – noi inmuebles",
+    # Nota: este file_id actualmente te da 404. Déjalo solo si ya confirmaste que es el ID correcto.
+    "finanzas": {
+        "name": "Finanzas – NOI / Core (Drive)",
         "drive_file_id": "1evlA46rpcMJ129Dwj33Eycg64yNwoTi9",
     },
+
+    # Este ya comprobaste que funciona
+    "test_noi_ia": {
+        "name": "Finanzas – TEST NOI IA",
+        "drive_file_id": "1HNAMX0wdOj-Lv5sUydk_rFp6Er5U8P4RSjCcILdOX-4",
+    },
+
+    # Este debería funcionar si el file_id es correcto y está en la Shared Drive
     "gestion_personal": {
-        "name": "Gestión de Personal – gestion personal",
+        "name": "Gestión de Personal – Operación Inmuebles",
         "drive_file_id": "13hRSF7BPFbHWZ16sQgRd8ix8JGxp2JkSPirQQ3ij2bA",
     },
+
+    # Este debería funcionar si el file_id es correcto y está en la Shared Drive
     "operaciones": {
-        "name": "Operaciones – operaciones",
+        "name": "Operaciones – Dashboard",
         "drive_file_id": "1uG4Z-EmrKT-KjOW5RKWZt1oCr9EgOn23yFb1-LW-D3M",
     },
 }
 
 # ===============================
-# Documentos (PDFs) para consulta (contratos, convenios, etc.)
+# Documentos (PDFs) para consulta
 # ===============================
 
 DATASETS_DOCUMENTS: Dict[str, Dict[str, Any]] = {
@@ -37,21 +46,5 @@ DATASETS_DOCUMENTS: Dict[str, Dict[str, Any]] = {
         "name": "1412-23-0000-ESPAMEX-CTO",
         "drive_file_id": "16L2ZyXT8cY27d0Z9bIBzLtlsD2evAhe_",
     },
-}
-
-DATASETS_SPREADSHEETS = {
-    "test_noi_ia": {
-        "name": "Finanzas – TEST NOI IA",
-        "drive_file_id": "1HNAMX0wdOj-Lv5sUydk_rFp6Er5U8P4RSjCcILdOX-4",
-    },
-    # el resto...
-}
-
-DATASETS_SPREADSHEETS = {
-    "gestion_personal": {
-        "name": "Personal – gestion_personal",
-        "drive_file_id": "13hRSF7BPFbHWZ16sQgRd8ix8JGxp2JkSPirQQ3ij2bA",
-    },
-    # el resto...
 }
 
