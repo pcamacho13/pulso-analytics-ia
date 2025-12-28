@@ -1034,7 +1034,11 @@ def ask_on_dataset(
     except Exception as e:
         return AskResponse(answer=f"Error generando código: {e}")
 
-    safe_globals = {"pd": pd}
+safe_globals = {
+    "pd": pd,
+    "smart_filter": smart_filter,
+    "best_match": best_match,
+}
     safe_locals = {"tables": {name: df.copy() for name, df in tables.items()}}
 
     try:
