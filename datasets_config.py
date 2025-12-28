@@ -14,8 +14,8 @@ from typing import Dict, Any
 # drive_file_id = ID del archivo en Google Drive
 
 DATASETS_SPREADSHEETS: Dict[str, Dict[str, Any]] = {
-    "finanzas": {
-        "name": "Finanzas – finanzas",
+    "noi_inmuebles": {
+        "name": "Finanzas – noi inmuebles",
         "drive_file_id": "1evlA46rpcMJ129Dwj33Eycg64yNwoTi9",
     },
     "gestion_personal": {
