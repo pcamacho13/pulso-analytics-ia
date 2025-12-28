@@ -930,7 +930,7 @@ def ask_on_dataset(
 ):
 
     try:
-        tables = load_tables_for_dataset_id(dataset_id)
+        tables = load_tables_from_drive_dataset(dataset_id)
     except Exception as e:
         return AskResponse(
             answer=f"No se pudo cargar el dataset '{dataset_id}': {e}"
