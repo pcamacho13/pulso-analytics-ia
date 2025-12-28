@@ -24,7 +24,13 @@ from data_loader import (
     load_tables_from_drive_dataset,
 )
 
+from datasets_config import DATASETS_SPREADSHEETS
+
 client = OpenAI()
+
+ENV = os.getenv("ENV", "local").lower()
+IS_PROD = ENV == "prod"
+
 
 
 # Límites para que el contexto que se envía al modelo sea ligero
@@ -817,23 +823,23 @@ def health():
 @app.get("/datasets", response_model=List[DatasetInfo])
 def list_datasets():
     """
-    Lista los archivos disponibles en la carpeta datasets/.
+    Lista datasets disponibles desde Google Drive (DATASETS_SPREADSHEETS).
+    Se usa para poblar el selector del frontend.
     """
     items: List[DatasetInfo] = []
 
-    if not os.path.exists(DATASETS_DIR):
-        return items
-
-    for fname in os.listdir(DATASETS_DIR):
-        path = os.path.join(DATASETS_DIR, fname)
-        if not os.path.isfile(path):
-            continue
-
-        root, ext = os.path.splitext(fname)
-        ext = ext.lower()
-
-        if ext in [".xlsx", ".xls", ".csv", ".pdf", ".docx", ".doc"]:
-            items.append(DatasetInfo(id=root, filename=fname, ext=ext))
+    for dataset_id, cfg in DATASETS_SPREADSHEETS.items():
+        # Para mantener tu modelo DatasetInfo sin romper UI:
+        # - id: dataset_id (ej. "noi_inmuebles")
+        # - filename: nombre legible (cfg["name"])
+        # - ext: "drive" (solo para identificarlo)
+        items.append(
+            DatasetInfo(
+                id=dataset_id,
+                filename=cfg.get("name", dataset_id),
+                ext="drive",
+            )
+        )
 
     return items
 
@@ -843,6 +849,12 @@ async def upload_excel(
     file: UploadFile = File(...),
     _auth: None = Depends(require_auth),
 ):
+    if IS_PROD:
+        raise HTTPException(
+            status_code=410,
+            detail="Endpoint deshabilitado. Usa datasets desde Google Drive (selector).",
+        )
+
 
     """
     Sube un nuevo archivo Excel con múltiples hojas.
@@ -871,6 +883,11 @@ def ask(
     request: AskRequest,
     _auth: None = Depends(require_auth),
 ):
+    if IS_PROD:
+        return AskResponse(
+            answer="Este endpoint ya no se usa en producción. Selecciona un dataset de Google Drive y consulta por /ask/{dataset_id}."
+        )
+
 
     global tables_global
     if not tables_global:
@@ -987,12 +1004,14 @@ def chat(
     request: ChatRequest,
     _auth: None = Depends(require_auth),
 ):
-
     ask_request = AskRequest(question=request.query)
 
     if request.dataset_id:
         respuesta = ask_on_dataset(request.dataset_id, ask_request)
     else:
-        respuesta = ask(ask_request)
+        return AskResponse(
+            answer="Selecciona un dataset para consultar (Drive)."
+        )
 
     return respuesta
+
