@@ -14,7 +14,7 @@ from typing import Dict, Any
 DATASETS_SPREADSHEETS: Dict[str, Dict[str, Any]] = {
     # Nota: este file_id actualmente te da 404. Déjalo solo si ya confirmaste que es el ID correcto.
     "noi_inmuebles": {
-        "name": "Finanzas – noi inmuebles",
+        "name": "Finanzas – NOI Inmuebles (Excel Drive)",
         "drive_file_id": "1evlA46rpcMJ129Dwj33Eycg64yNwoTi9",
     },
 
