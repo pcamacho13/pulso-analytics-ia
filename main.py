@@ -700,9 +700,28 @@ async def pulso_analytics_ui(request: Request):
             const div = document.createElement('div');
             div.className = 'message ' + role;
 
-            if (role === 'assistant') {
-                // La IA devuelve HTML (títulos, listas, etc.)
-                div.innerHTML = text;
+if (role === 'assistant') {
+    // Render de HTML con sanitización mínima (bloquea script/handlers)
+    const tpl = document.createElement('template');
+    tpl.innerHTML = String(text || '');
+
+    // Eliminar scripts
+    tpl.content.querySelectorAll('script').forEach(n => n.remove());
+
+    // Eliminar atributos peligrosos (on*, javascript:)
+    tpl.content.querySelectorAll('*').forEach(el => {
+        [...el.attributes].forEach(attr => {
+            const name = attr.name.toLowerCase();
+            const val = String(attr.value || '').toLowerCase();
+            if (name.startsWith('on')) el.removeAttribute(attr.name);
+            if ((name === 'href' || name === 'src') && val.startsWith('javascript:')) {
+                el.removeAttribute(attr.name);
+            }
+        });
+    });
+
+    div.appendChild(tpl.content);
+} else {
             } else {
                 // El usuario se muestra como texto plano
                 div.textContent = text;
