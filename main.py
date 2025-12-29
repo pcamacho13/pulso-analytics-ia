@@ -494,6 +494,57 @@ async def pulso_analytics_ui(request: Request):
             font-size: 0.75rem;
             color: #6b7280;
         }
+        /* === FIXED CHAT LAYOUT (WhatsApp/ChatGPT style) === */
+        html, body {
+            height: 100%;
+        }
+        body {
+            height: 100vh;
+            overflow: hidden; /* evita scroll del body; el scroll será del chat */
+        }
+        .app-container {
+            height: calc(100vh - 48px); /* 24px top + 24px bottom del body */
+            min-height: 0;              /* permite que hijos con overflow funcionen */
+        }
+        .header {
+            position: sticky;
+            top: 0;
+            background: #ffffff;
+            padding-bottom: 12px;
+            z-index: 20;
+        }
+        .top-bar {
+            position: sticky;
+            top: 64px;        /* debajo del header */
+            z-index: 19;
+        }
+        .chat-area {
+            min-height: 0;    /* crítico: permite scroll interno real */
+            overflow-y: auto;
+        }
+        .input-area {
+            position: sticky;
+            bottom: 0;
+            background: #ffffff;
+            padding-bottom: 12px;
+            z-index: 20;
+        }        
+        /* === Scroll helpers === */
+        .scroll-to-bottom {
+            position: fixed;
+            right: 24px;
+            bottom: 110px; /* arriba del input */
+            background: #003C5E;
+            color: #ffffff;
+            border: none;
+            border-radius: 999px;
+            padding: 10px 14px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.15);
+            display: none; /* se activa por JS */
+            z-index: 50;
+        }
     </style>
 </head>
 <body>
@@ -524,11 +575,15 @@ async def pulso_analytics_ui(request: Request):
             </div>
         </div>
 
+        <button id="scroll-btn" class="scroll-to-bottom" type="button">Bajar al final</button>
+
         <form id="chat-form" class="input-area">
             <textarea id="user-input" rows="1" placeholder="Escribe aquí tu consulta..." required></textarea>
             <button type="submit" id="send-btn">Enviar</button>
         </form>
         <div id="status" class="status"></div>
+        <div id="trace" class="status"></div>
+
     </div>
 
     <script>
@@ -536,10 +591,32 @@ async def pulso_analytics_ui(request: Request):
         const input = document.getElementById('user-input');
         const chat = document.getElementById('chat');
         const statusEl = document.getElementById('status');
+        const traceEl = document.getElementById('trace');
         const sendBtn = document.getElementById('send-btn');
         const datasetSelect = document.getElementById('dataset-select');
+        const scrollBtn = document.getElementById('scroll-btn');
 
         let selectedDatasetId = null;
+
+        // === Input behavior tipo chat: auto-resize + Enter para enviar (Shift+Enter = nueva línea) ===
+        function autoResizeTextarea(el) {
+            el.style.height = 'auto';
+            const maxHeight = 140; // px ~ 6-7 líneas
+            el.style.height = Math.min(el.scrollHeight, maxHeight) + 'px';
+            el.style.overflowY = (el.scrollHeight > maxHeight) ? 'auto' : 'hidden';
+        }
+
+        autoResizeTextarea(input);
+
+        input.addEventListener('input', () => autoResizeTextarea(input));
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                form.requestSubmit(); // dispara el submit del form
+            }
+        });
+
 
         // 🚀 Cargar lista de datasets al inicio
         async function loadDatasets() {
@@ -567,6 +644,13 @@ async def pulso_analytics_ui(request: Request):
                         selectedDatasetId = ds.id;
                     }
                 });
+
+                // Trazabilidad UI (mínima)
+                const selectedOpt = datasetSelect.options[datasetSelect.selectedIndex];
+                traceEl.textContent = selectedOpt && selectedOpt.value
+                    ? `Fuente (dataset): ${selectedOpt.textContent}`
+                    : '';
+                
             } catch (err) {
                 datasetSelect.innerHTML = '';
                 const opt = document.createElement('option');
@@ -580,7 +664,37 @@ async def pulso_analytics_ui(request: Request):
         datasetSelect.addEventListener('change', () => {
             const value = datasetSelect.value;
             selectedDatasetId = value || null;
+
+            const selectedOpt = datasetSelect.options[datasetSelect.selectedIndex];
+            traceEl.textContent = selectedOpt && selectedOpt.value
+                ? `Fuente (dataset): ${selectedOpt.textContent}`
+                : '';
         });
+
+        function isNearBottom() {
+            const threshold = 60; // px
+            return (chat.scrollHeight - chat.scrollTop - chat.clientHeight) < threshold;
+        }
+
+        function updateScrollBtn() {
+            if (isNearBottom()) {
+                scrollBtn.style.display = 'none';
+            } else {
+                scrollBtn.style.display = 'block';
+            }
+        }
+
+        function scrollToBottom() {
+            chat.scrollTop = chat.scrollHeight;
+            updateScrollBtn();
+        }
+
+        chat.addEventListener('scroll', updateScrollBtn);
+
+        scrollBtn.addEventListener('click', () => {
+            scrollToBottom();
+        });
+
 
         function addMessage(text, role) {
             const div = document.createElement('div');
@@ -594,10 +708,14 @@ async def pulso_analytics_ui(request: Request):
                 div.textContent = text;
             }
 
+            const shouldStick = isNearBottom();
             chat.appendChild(div);
-            chat.scrollTop = chat.scrollHeight;
+            if (shouldStick) {
+                scrollToBottom();
+            } else {
+                updateScrollBtn();
+            }
         }
-
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -606,12 +724,33 @@ async def pulso_analytics_ui(request: Request):
 
             addMessage(question, 'user');
             input.value = '';
-            input.style.height = 'auto';
+            autoResizeTextarea(input);
 
-            // ⏱️ Iniciamos cronómetro
+            // ⏱️ Iniciamos cronómetro (mm:ss) en vivo
             const startTime = performance.now();
-            statusEl.textContent = 'Generando respuesta...';
             sendBtn.disabled = true;
+
+            let timerId = null;
+            function formatElapsed(ms) {
+                const totalSeconds = Math.floor(ms / 1000);
+                const mm = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+                const ss = String(totalSeconds % 60).padStart(2, '0');
+                return `${mm}:${ss}`;
+            }
+            function startTimer() {
+                statusEl.textContent = `Analizando información… (${formatElapsed(0)})`;
+                timerId = setInterval(() => {
+                    const now = performance.now();
+                    statusEl.textContent = `Analizando información… (${formatElapsed(now - startTime)})`;
+                }, 250);
+            }
+            function stopTimer(finalText) {
+                if (timerId) clearInterval(timerId);
+                timerId = null;
+                statusEl.textContent = finalText;
+            }
+
+            startTimer();
 
             try {
                 const payload = { query: question };
@@ -628,15 +767,14 @@ async def pulso_analytics_ui(request: Request):
                 const data = await res.json();
                 addMessage(data.answer, 'assistant');
 
-                // ⏱️ Calculamos tiempo al terminar
+                // ⏱️ Tiempo final
                 const endTime = performance.now();
-                const elapsedSeconds = (endTime - startTime) / 1000;
-                statusEl.textContent = `Tiempo de respuesta: ${elapsedSeconds.toFixed(1)} segundos`;
+                const final = `Tiempo de respuesta: ${formatElapsed(endTime - startTime)}`;
+                stopTimer(final);
             } catch (err) {
                 const endTime = performance.now();
-                const elapsedSeconds = (endTime - startTime) / 1000;
                 addMessage('Error al obtener respuesta del servidor.', 'assistant');
-                statusEl.textContent = `Error. Tiempo transcurrido: ${elapsedSeconds.toFixed(1)} segundos`;
+                stopTimer(`Error. Tiempo transcurrido: ${formatElapsed(endTime - startTime)}`);
             } finally {
                 sendBtn.disabled = false;
             }
@@ -889,6 +1027,46 @@ class ChatRequest(BaseModel):
     query: str
     dataset_id: Optional[str] = None
 
+from datetime import datetime
+
+def error_card_html(title: str, bullets: List[str], trace: Optional[str] = None) -> str:
+    """
+    Devuelve un bloque HTML sencillo para mostrar errores en el chat (UI).
+    """
+    items = "".join(f"<li>{pd.io.formats.html.escape(str(b))}</li>" for b in bullets)
+    trace_html = (
+        f"<div style='margin-top:8px; font-size:12px; color:#6b7280;'>"
+        f"{pd.io.formats.html.escape(trace)}"
+        f"</div>"
+        if trace else ""
+    )
+
+    return f"""
+    <div style="max-width: 100%;">
+      <div style="font-weight:700; font-size:1.05rem; margin-bottom:6px;">{pd.io.formats.html.escape(title)}</div>
+      <ul style="margin-left:18px; line-height:1.45;">
+        {items}
+      </ul>
+      {trace_html}
+    </div>
+    """.strip()
+
+
+def wrap_with_trace_html(answer_html: str, *, dataset_id: str, dataset_name: str, user_email: Optional[str]) -> str:
+    """
+    Agrega un footer de trazabilidad a una respuesta HTML (sin modificar el contenido principal).
+    """
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ue = user_email or "N/D"
+    trace = f"Fuente: {dataset_name} | dataset_id: {dataset_id} | Usuario: {ue} | {ts}"
+
+    return (
+        f"{answer_html}"
+        f"<div style='margin-top:10px; font-size:12px; color:#6b7280;'>"
+        f"{pd.io.formats.html.escape(trace)}"
+        f"</div>"
+    )
+
 
 # ---------- ENDPOINTS ----------
 
@@ -1023,7 +1201,8 @@ def ask(
 @app.post("/ask/{dataset_id}", response_model=AskResponse)
 def ask_on_dataset(
     dataset_id: str,
-    request: AskRequest,
+    ask: AskRequest,
+    http_request: Request,
     _auth: None = Depends(require_auth),
 ):
 
@@ -1034,7 +1213,7 @@ def ask_on_dataset(
             answer=f"No se pudo cargar el dataset '{dataset_id}': {e}"
         )
 
-    question = request.question
+    question = ask.question
 
     try:
         code = generate_pandas_code(question, tables)
@@ -1081,22 +1260,53 @@ def ask_on_dataset(
             f"Vista previa del resultado:\n{preview_text}"
         )
 
-    return AskResponse(answer=explanation)
+    dataset_name = DATASETS_SPREADSHEETS.get(dataset_id, {}).get("name", dataset_id)
+    user_email = http_request.session.get("user_email") if hasattr(http_request, "session") else None
+
+    return AskResponse(
+        answer=wrap_with_trace_html(
+            explanation,
+            dataset_id=dataset_id,
+            dataset_name=dataset_name,
+            user_email=user_email,
+        )
+    )
 
 
 @app.post("/chat", response_model=AskResponse)
 def chat(
-    request: ChatRequest,
+    payload: ChatRequest,
+    http_request: Request,
     _auth: None = Depends(require_auth),
 ):
-    ask_request = AskRequest(question=request.query)
+    ask_request = AskRequest(question=payload.query)
 
-    if request.dataset_id:
-        respuesta = ask_on_dataset(request.dataset_id, ask_request)
-    else:
+    # 1) Validación: dataset requerido
+    if not payload.dataset_id:
         return AskResponse(
-            answer="Selecciona un dataset para consultar (Drive)."
+            answer=error_card_html(
+                title="No se seleccionó un dataset",
+                bullets=[
+                    "Selecciona un dataset en el menú desplegable (barra superior).",
+                    "Después vuelve a enviar tu consulta.",
+                ],
+                trace="Fuente (dataset): no seleccionado",
+            )
         )
 
-    return respuesta
+    # 2) Validación: dataset_id permitido (debe existir en DATASETS_SPREADSHEETS)
+    if payload.dataset_id not in DATASETS_SPREADSHEETS:
+        return AskResponse(
+            answer=error_card_html(
+                title="Dataset inválido",
+                bullets=[
+                    f"El dataset_id recibido no existe o no está autorizado: {payload.dataset_id}",
+                    "Selecciona un dataset válido desde el selector.",
+                ],
+                trace=f"Fuente (dataset): {payload.dataset_id}",
+            )
+        )
+
+    # 3) Flujo normal
+    return ask_on_dataset(payload.dataset_id, ask_request, http_request=http_request)
 
