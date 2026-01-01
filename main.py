@@ -2,6 +2,7 @@ import os
 import io
 import difflib
 import unicodedata
+import html
 from typing import List, Optional
 
 import pandas as pd
@@ -1056,17 +1057,17 @@ def error_card_html(title: str, bullets: List[str], trace: Optional[str] = None)
     """
     Devuelve un bloque HTML sencillo para mostrar errores en el chat (UI).
     """
-    items = "".join(f"<li>{pd.io.formats.html.escape(str(b))}</li>" for b in bullets)
+    items = "".join(f"<li>{html.escape(str(b))}</li>" for b in bullets)
     trace_html = (
         f"<div style='margin-top:8px; font-size:12px; color:#6b7280;'>"
-        f"{pd.io.formats.html.escape(trace)}"
+        f"{html.escape(trace)}"
         f"</div>"
         if trace else ""
     )
 
     return f"""
     <div style="max-width: 100%;">
-      <div style="font-weight:700; font-size:1.05rem; margin-bottom:6px;">{pd.io.formats.html.escape(title)}</div>
+      <div style="font-weight:700; font-size:1.05rem; margin-bottom:6px;">{html.escape(title)}</div>
       <ul style="margin-left:18px; line-height:1.45;">
         {items}
       </ul>
@@ -1086,7 +1087,7 @@ def wrap_with_trace_html(answer_html: str, *, dataset_id: str, dataset_name: str
     return (
         f"{answer_html}"
         f"<div style='margin-top:10px; font-size:12px; color:#6b7280;'>"
-        f"{pd.io.formats.html.escape(trace)}"
+        f"{html.escape(trace)}"
         f"</div>"
     )
 
