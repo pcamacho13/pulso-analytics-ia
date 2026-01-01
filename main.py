@@ -116,6 +116,8 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=os.environ.get("APP_SECRET_KEY", "dev-secret-key"),
     session_cookie="pulso_analytics_session",
+    same_site="none",
+    https_only=True,
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
