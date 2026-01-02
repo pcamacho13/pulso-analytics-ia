@@ -1195,9 +1195,11 @@ def chat(
 
     # A) saludo exacto
     if q in GREETINGS:
+        print(f"[CHAT] BRANCH=GREETINGS q_raw={q_raw!r} q_norm={q!r} dataset_id={payload.dataset_id!r}")
         return AskResponse(
             answer=(
-                "Hola. Para ayudarte, haz una consulta específica.\n"
+                "[BRANCH:GREETINGS]\n"
+                "Hola. Para ayudarte, selecciona un dataset y haz una consulta específica.\n"
                 "Ejemplos:\n"
                 "• “NOI de Manacar enero 2025”\n"
                 "• “Top 10 inmuebles por NOI 2025”\n"
