@@ -895,6 +895,14 @@ def explain_result(question: str, code: str, result_preview: str) -> str:
     if len(result_preview) > MAX_PREVIEW_CHARS:
         result_preview = result_preview[:MAX_PREVIEW_CHARS] + "\n...[texto truncado para la explicación]"
 
+    # ⛔ Blindaje: si NO hubo análisis, no llamar al modelo
+    if "[NO_ANALISIS]" in result_preview:
+        return (
+            "No se realizó un análisis con datos.\n"
+            "Por favor formula una consulta específica indicando "
+            "métrica, inmueble, periodo o persona."
+        )
+
     system_msg = {
         "role": "system",
         "content": (
