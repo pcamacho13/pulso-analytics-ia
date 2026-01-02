@@ -4,32 +4,33 @@ import difflib
 import unicodedata
 import html
 from typing import List, Optional
+from datetime import datetime
 
 import pandas as pd
 import requests
 
 from fastapi import FastAPI, Request, Depends, HTTPException, File, UploadFile
-from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from starlette.middleware.sessions import SessionMiddleware
-
 from pydantic import BaseModel
 
 from openai import OpenAI
 
 from data_loader import (
     DATA_PATH,
-    DATASETS_DIR,
     load_excel_to_tables,
-    load_tables_for_dataset_id,
     load_tables_from_drive_dataset,
 )
 
 from datasets_config import DATASETS_SPREADSHEETS
 
-client = OpenAI()
+
+# =========================
+# Utilidades de texto
+# =========================
 
 def _norm_text(s: str) -> str:
     """Normaliza texto: minúsculas, sin acentos, sin dobles espacios."""
@@ -50,6 +51,7 @@ def best_match(query: str, choices: List[str], cutoff: float = 0.72) -> Optional
         return None
 
     qn = _norm_text(query)
+
     # Mapa normalizado -> original
     norm_map = {}
     norm_list = []
@@ -94,17 +96,17 @@ def smart_filter(df: pd.DataFrame, col: str, query: str) -> pd.DataFrame:
     return df
 
 
+# =========================
+# Config general
+# =========================
+
 ENV = os.getenv("ENV", "local").lower()
 IS_PROD = ENV == "prod"
-
-
 
 # Límites para que el contexto que se envía al modelo sea ligero
 MAX_TABLES_FOR_PROMPT = 3      # máx. hojas que se describen
 MAX_COLS_PER_TABLE = 6         # máx. columnas por hoja
 MAX_ROWS_PER_TABLE = 2         # máx. filas de ejemplo por hoja
-
-# ---------- CONFIGURACIÓN BÁSICA ----------
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 
@@ -123,10 +125,11 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# OpenAI client
 client = OpenAI()
 
 # =========================
-# Configuración de Google OAuth y acceso permitido
+# Google OAuth config
 # =========================
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
@@ -154,11 +157,9 @@ def is_email_allowed(email: str) -> bool:
     """
     email = email.lower()
 
-    # 1) Validar dominio
     if not email.endswith(f"@{ALLOWED_DOMAIN}"):
         return False
 
-    # 2) Validar lista blanca (si hay correos configurados)
     if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
         return False
 
@@ -166,22 +167,17 @@ def is_email_allowed(email: str) -> bool:
 
 
 def require_auth(request: Request):
-    """
-    Dependencia para proteger endpoints.
-    Lanza 401 si el usuario no está autenticado.
-    """
+    """Dependencia para proteger endpoints."""
     if not request.session.get("authenticated"):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+
 # =========================
-# Rutas de autenticación con Google
+# Auth routes
 # =========================
 
 @app.get("/auth/google/login")
 def google_login(request: Request):
-    """
-    Redirige al usuario a Google para iniciar sesión.
-    """
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         return HTMLResponse(
             "Error de configuración: faltan GOOGLE_CLIENT_ID o GOOGLE_CLIENT_SECRET.",
@@ -191,7 +187,6 @@ def google_login(request: Request):
     redirect_uri = request.url_for("google_callback")
 
     from urllib.parse import urlencode
-
     params = {
         "client_id": GOOGLE_CLIENT_ID,
         "response_type": "code",
@@ -208,22 +203,16 @@ def google_login(request: Request):
 
 @app.get("/auth/google/callback")
 def google_callback(request: Request):
-    """
-    Ruta a la que Google redirige después del login.
-    Intercambia el 'code' por tokens y obtiene el email del usuario.
-    """
     code = request.query_params.get("code")
     error = request.query_params.get("error")
 
     if error:
         return HTMLResponse(f"Error de Google OAuth: {error}", status_code=400)
-
     if not code:
         return HTMLResponse("No se recibió el código de autorización.", status_code=400)
 
     redirect_uri = request.url_for("google_callback")
 
-    # 1) Intercambiar código por tokens
     data = {
         "code": code,
         "client_id": GOOGLE_CLIENT_ID,
@@ -248,7 +237,6 @@ def google_callback(request: Request):
             status_code=500,
         )
 
-    # 2) Obtener datos del usuario
     headers = {"Authorization": f"Bearer {access_token}"}
     userinfo_resp = requests.get(GOOGLE_USERINFO_ENDPOINT, headers=headers)
 
@@ -263,37 +251,29 @@ def google_callback(request: Request):
     name = userinfo.get("name")
 
     if not email:
-        return HTMLResponse(
-            "No se obtuvo el correo electrónico del usuario.",
-            status_code=500,
-        )
+        return HTMLResponse("No se obtuvo el correo electrónico del usuario.", status_code=500)
 
-    # 3) Validar dominio + lista blanca
     if not is_email_allowed(email):
         return HTMLResponse(
             f"Tu cuenta ({email}) no está autorizada para acceder a Pulso Analytics IA.",
             status_code=403,
         )
 
-    # 4) Crear sesión
     request.session["authenticated"] = True
     request.session["user_email"] = email
     request.session["user_name"] = name
 
-    # Redirigir a la página principal
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/logout")
 def logout(request: Request):
-    """
-    Cierra la sesión y redirige al login con Google.
-    """
     request.session.clear()
     return RedirectResponse(url="/auth/google/login", status_code=303)
 
+
 # =========================
-# Ruta de DEBUG para probar lectura desde Google Drive
+# Debug route
 # =========================
 
 @app.get("/debug/drive-dataset/{dataset_id}")
@@ -301,20 +281,10 @@ def debug_drive_dataset(
     dataset_id: str,
     _auth: None = Depends(require_auth),
 ):
-    """
-    Ruta de prueba para verificar que podemos leer un dataset desde Google Drive.
-
-    - Usa load_tables_from_drive_dataset(dataset_id).
-    - Regresa el listado de hojas y el número de filas/columnas de cada una.
-    """
     try:
         tables = load_tables_from_drive_dataset(dataset_id)
     except Exception as e:
-        # En caso de error, regresamos el mensaje para diagnosticar
-        return JSONResponse(
-            {"ok": False, "error": str(e)},
-            status_code=500,
-        )
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
     summary = {}
     for sheet_name, df in tables.items():
@@ -324,14 +294,12 @@ def debug_drive_dataset(
             "columns_names": list(df.columns.astype(str)),
         }
 
-    return JSONResponse(
-        {
-            "ok": True,
-            "dataset_id": dataset_id,
-            "sheets": summary,
-        }
-    )
+    return JSONResponse({"ok": True, "dataset_id": dataset_id, "sheets": summary})
 
+
+# =========================
+# UI
+# =========================
 
 @app.get("/docs", response_class=HTMLResponse)
 async def pulso_analytics_ui(request: Request):
@@ -497,18 +465,11 @@ async def pulso_analytics_ui(request: Request):
             font-size: 0.75rem;
             color: #6b7280;
         }
-        /* === FIXED CHAT LAYOUT (WhatsApp/ChatGPT style) === */
-        html, body {
-            height: 100%;
-        }
-        body {
-            height: 100vh;
-            overflow: hidden; /* evita scroll del body; el scroll será del chat */
-        }
-        .app-container {
-            height: calc(100vh - 48px); /* 24px top + 24px bottom del body */
-            min-height: 0;              /* permite que hijos con overflow funcionen */
-        }
+
+        /* === FIXED CHAT LAYOUT === */
+        html, body { height: 100%; }
+        body { height: 100vh; overflow: hidden; }
+        .app-container { height: calc(100vh - 48px); min-height: 0; }
         .header {
             position: sticky;
             top: 0;
@@ -518,25 +479,22 @@ async def pulso_analytics_ui(request: Request):
         }
         .top-bar {
             position: sticky;
-            top: 64px;        /* debajo del header */
+            top: 64px;
             z-index: 19;
         }
-        .chat-area {
-            min-height: 0;    /* crítico: permite scroll interno real */
-            overflow-y: auto;
-        }
+        .chat-area { min-height: 0; overflow-y: auto; }
         .input-area {
             position: sticky;
             bottom: 0;
             background: #ffffff;
             padding-bottom: 12px;
             z-index: 20;
-        }        
-        /* === Scroll helpers === */
+        }
+
         .scroll-to-bottom {
             position: fixed;
             right: 24px;
-            bottom: 110px; /* arriba del input */
+            bottom: 110px;
             background: #003C5E;
             color: #ffffff;
             border: none;
@@ -545,7 +503,7 @@ async def pulso_analytics_ui(request: Request):
             font-size: 0.85rem;
             cursor: pointer;
             box-shadow: 0 10px 15px -3px rgba(0,0,0,0.15);
-            display: none; /* se activa por JS */
+            display: none;
             z-index: 50;
         }
     </style>
@@ -586,7 +544,6 @@ async def pulso_analytics_ui(request: Request):
         </form>
         <div id="status" class="status"></div>
         <div id="trace" class="status"></div>
-
     </div>
 
     <script>
@@ -601,30 +558,26 @@ async def pulso_analytics_ui(request: Request):
 
         let selectedDatasetId = null;
 
-        // === Input behavior tipo chat: auto-resize + Enter para enviar (Shift+Enter = nueva línea) ===
         function autoResizeTextarea(el) {
             el.style.height = 'auto';
-            const maxHeight = 140; // px ~ 6-7 líneas
+            const maxHeight = 140;
             el.style.height = Math.min(el.scrollHeight, maxHeight) + 'px';
             el.style.overflowY = (el.scrollHeight > maxHeight) ? 'auto' : 'hidden';
         }
 
         autoResizeTextarea(input);
-
         input.addEventListener('input', () => autoResizeTextarea(input));
 
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                form.requestSubmit(); // dispara el submit del form
+                form.requestSubmit();
             }
         });
 
-
-        // 🚀 Cargar lista de datasets al inicio
         async function loadDatasets() {
             try {
-                const res = await fetch('/datasets');
+                const res = await fetch('/datasets', { credentials: 'include' });
                 const data = await res.json();
 
                 datasetSelect.innerHTML = '';
@@ -643,17 +596,13 @@ async def pulso_analytics_ui(request: Request):
                     opt.value = ds.id;
                     opt.textContent = ds.filename;
                     datasetSelect.appendChild(opt);
-                    if (index === 0) {
-                        selectedDatasetId = ds.id;
-                    }
+                    if (index === 0) selectedDatasetId = ds.id;
                 });
 
-                // Trazabilidad UI (mínima)
                 const selectedOpt = datasetSelect.options[datasetSelect.selectedIndex];
                 traceEl.textContent = selectedOpt && selectedOpt.value
                     ? `Fuente (dataset): ${selectedOpt.textContent}`
                     : '';
-                
             } catch (err) {
                 datasetSelect.innerHTML = '';
                 const opt = document.createElement('option');
@@ -675,16 +624,12 @@ async def pulso_analytics_ui(request: Request):
         });
 
         function isNearBottom() {
-            const threshold = 60; // px
+            const threshold = 60;
             return (chat.scrollHeight - chat.scrollTop - chat.clientHeight) < threshold;
         }
 
         function updateScrollBtn() {
-            if (isNearBottom()) {
-                scrollBtn.style.display = 'none';
-            } else {
-                scrollBtn.style.display = 'block';
-            }
+            scrollBtn.style.display = isNearBottom() ? 'none' : 'block';
         }
 
         function scrollToBottom() {
@@ -693,52 +638,39 @@ async def pulso_analytics_ui(request: Request):
         }
 
         chat.addEventListener('scroll', updateScrollBtn);
+        scrollBtn.addEventListener('click', () => scrollToBottom());
 
-        scrollBtn.addEventListener('click', () => {
-            scrollToBottom();
-        });
+        function addMessage(text, role) {
+            const div = document.createElement('div');
+            div.className = 'message ' + role;
 
+            if (role === 'assistant') {
+                const tpl = document.createElement('template');
+                tpl.innerHTML = String(text || '');
 
-function addMessage(text, role) {
-    const div = document.createElement('div');
-    div.className = 'message ' + role;
+                tpl.content.querySelectorAll('script').forEach(el => el.remove());
 
-    if (role === 'assistant') {
-        // Sanitización mínima sin librerías externas
-        const tpl = document.createElement('template');
-        tpl.innerHTML = text;
+                tpl.content.querySelectorAll('*').forEach(el => {
+                    [...el.attributes].forEach(attr => {
+                        const name = attr.name.toLowerCase();
+                        const val = String(attr.value || '').toLowerCase();
+                        if (name.startsWith('on')) el.removeAttribute(attr.name);
+                        if ((name === 'href' || name === 'src') && val.startsWith('javascript:')) {
+                            el.removeAttribute(attr.name);
+                        }
+                    });
+                });
 
-        // Eliminar scripts
-        tpl.content.querySelectorAll('script').forEach(el => el.remove());
+                div.appendChild(tpl.content);
+            } else {
+                div.textContent = text;
+            }
 
-        // Eliminar handlers on* y javascript: en href/src
-        tpl.content.querySelectorAll('*').forEach(el => {
-            [...el.attributes].forEach(attr => {
-                const name = attr.name.toLowerCase();
-                const val = String(attr.value || '').toLowerCase();
-
-                if (name.startsWith('on')) el.removeAttribute(attr.name);
-                if ((name === 'href' || name === 'src') && val.startsWith('javascript:')) {
-                    el.removeAttribute(attr.name);
-                }
-            });
-        });
-
-        div.appendChild(tpl.content);
-    } else {
-        // Usuario: texto plano
-        div.textContent = text;
-    }
-
-    const shouldStick = isNearBottom();
-    chat.appendChild(div);
-
-    if (shouldStick) {
-        scrollToBottom();
-    } else {
-        updateScrollBtn();
-    }
-}
+            const shouldStick = isNearBottom();
+            chat.appendChild(div);
+            if (shouldStick) scrollToBottom();
+            else updateScrollBtn();
+        }
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -749,7 +681,6 @@ function addMessage(text, role) {
             input.value = '';
             autoResizeTextarea(input);
 
-            // ⏱️ Iniciamos cronómetro (mm:ss) en vivo
             const startTime = performance.now();
             sendBtn.disabled = true;
 
@@ -777,9 +708,7 @@ function addMessage(text, role) {
 
             try {
                 const payload = { query: question };
-                if (selectedDatasetId) {
-                    payload.dataset_id = selectedDatasetId;
-                }
+                if (selectedDatasetId) payload.dataset_id = selectedDatasetId;
 
                 const res = await fetch('/chat', {
                     method: 'POST',
@@ -791,10 +720,8 @@ function addMessage(text, role) {
                 const data = await res.json();
                 addMessage(data.answer, 'assistant');
 
-                // ⏱️ Tiempo final
                 const endTime = performance.now();
-                const final = `Tiempo de respuesta: ${formatElapsed(endTime - startTime)}`;
-                stopTimer(final);
+                stopTimer(`Tiempo de respuesta: ${formatElapsed(endTime - startTime)}`);
             } catch (err) {
                 const endTime = performance.now();
                 addMessage('Error al obtener respuesta del servidor.', 'assistant');
@@ -804,24 +731,23 @@ function addMessage(text, role) {
             }
         });
 
-        // Cargar datasets al inicio
         loadDatasets();
     </script>
 </body>
 </html>"""
     return HTMLResponse(content=html_content)
 
+
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    # Validación: si no hay sesión, mandar al login con Google
     if not request.session.get("authenticated"):
         return RedirectResponse(url="/auth/google/login", status_code=303)
-
-    # Si ya está autenticado, mostrar la interfaz actual
     return await pulso_analytics_ui(request)
 
 
-# ---------- CORS ----------
+# =========================
+# CORS
+# =========================
 
 app.add_middleware(
     CORSMiddleware,
@@ -831,9 +757,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- ESTADO GLOBAL POR DEFECTO ----------
 
-# Dataset por defecto (cuando no se especifica dataset_id)
+# =========================
+# Estado global por defecto
+# =========================
+
 tables_global: dict[str, pd.DataFrame] = {}
 
 
@@ -850,45 +778,25 @@ def startup_event():
         tables_global = {}
 
 
-# ---------- IA (MODELO OPENAI) ----------
+# =========================
+# OpenAI helpers
+# =========================
 
 def call_openai(messages, model: str = "gpt-4.1-mini"):
-    """
-    Llama al modelo de OpenAI usando la API de chat.completions.
-    'messages' es una lista de dicts con role/content, por ejemplo:
-    [
-        {"role": "system", "content": "Eres un analista de datos..."},
-        {"role": "user", "content": "¿Qué inmueble tuvo el mayor NOI en 2025?"}
-    ]
-    """
     response = client.chat.completions.create(
         model=model,
         messages=messages,
         max_tokens=800,
     )
-
     return response.choices[0].message.content.strip()
 
 
 def generate_pandas_code(question: str, tables: dict[str, pd.DataFrame]) -> str:
-    """
-    Pide al modelo que genere código Python/pandas para responder la pregunta
-    usando el diccionario 'tables', donde:
-      - keys = nombres de hoja
-      - values = DataFrames
-
-    OPTIMIZADO:
-    - Solo mandamos al modelo una MUESTRA pequeña:
-      pocas tablas, pocas columnas y pocas filas.
-    """
-
-    # 1) Construimos descripción compacta de cada tabla
     tables_info_parts = []
     for idx, (name, df) in enumerate(tables.items()):
         if idx >= MAX_TABLES_FOR_PROMPT:
             break
 
-        # Limitamos columnas y filas
         cols = list(df.columns[:MAX_COLS_PER_TABLE])
         df_small = df[cols].head(MAX_ROWS_PER_TABLE)
 
@@ -903,12 +811,8 @@ def generate_pandas_code(question: str, tables: dict[str, pd.DataFrame]) -> str:
 
     tables_description = "\n\n".join(tables_info_parts)
 
-    # 2) Detectamos si el usuario mencionó alguna hoja por nombre en su pregunta
     question_lower = question.lower()
-    mentioned_sheets = [
-        name for name in tables.keys()
-        if name.lower() in question_lower
-    ]
+    mentioned_sheets = [name for name in tables.keys() if name.lower() in question_lower]
 
     if mentioned_sheets:
         sheets_hint = (
@@ -959,7 +863,6 @@ def generate_pandas_code(question: str, tables: dict[str, pd.DataFrame]) -> str:
             "(puesto, área, fecha, antigüedad, etc.). NO menciones métricas financieras como NOI, GOP, presupuesto, rentas, etc. "
             "a menos que existan explícitamente en las columnas.\n"
             "8) NO uses ``` ni bloques de código. SOLO código Python limpio, sin comentarios ni prints."
-
         ),
     }
 
@@ -981,41 +884,30 @@ def generate_pandas_code(question: str, tables: dict[str, pd.DataFrame]) -> str:
     }
 
     code_text = call_openai([system_msg, user_msg])
-
-    # Limpieza: quitar ```python y ``` si el modelo los incluye
-    code_text = code_text.replace("```python", "")
-    code_text = code_text.replace("```", "")
-    code_text = code_text.strip()
-
+    code_text = code_text.replace("```python", "").replace("```", "").strip()
     return code_text
 
 
-
 def explain_result(question: str, code: str, result_preview: str) -> str:
-    """
-    Pide al modelo que explique el resultado en lenguaje natural.
-    OPTIMIZADO:
-    - Limita el tamaño del texto de vista previa para no mandar bloques enormes.
-    """
-
-    # 1) Acortamos el preview si es muy largo
     MAX_PREVIEW_CHARS = 1500
+    if result_preview is None:
+        result_preview = ""
     if len(result_preview) > MAX_PREVIEW_CHARS:
         result_preview = result_preview[:MAX_PREVIEW_CHARS] + "\n...[texto truncado para la explicación]"
 
     system_msg = {
         "role": "system",
         "content": (
-            "Eres un analista financiero y de negocios que explica resultados de análisis de datos "
-            "en ESPAÑOL claro, breve y accionable.\n\n"
-            "Reglas importantes:\n"
-            "- Si mencionas NOI, se refiere SIEMPRE a 'Ingreso Neto Operativo' "
-            "(Net Operating Income). NO inventes otros significados.\n"
-            "- No inventes definiciones creativas para otras siglas; si no puedes "
-            "inferir con claridad su significado a partir de los datos, menciona "
-            "que el acrónimo no está definido en las tablas.\n"
-            "- Explica el resultado de forma concreta y con enfoque de negocio.\n"
-            "- Incluye una breve interpretación y, si aplica, recomendaciones."
+            "Eres un analista de datos y de negocios que explica resultados de análisis en ESPAÑOL claro, breve y accionable.\n\n"
+            "Reglas obligatorias:\n"
+            "1) Si la pregunta del usuario es un saludo, conversación social o no pide análisis (ej. 'hola', 'gracias', 'ok'), "
+            "responde MUY breve y pide una consulta específica (métrica, inmueble, periodo, persona, etc.).\n"
+            "2) Si el resultado indica que NO hay datos, que no se ejecutó análisis, o que es un texto genérico, "
+            "NO hagas interpretación financiera ni inventes hallazgos. Solo explica que no hubo análisis y sugiere qué preguntar.\n"
+            "3) Si el resultado contiene la etiqueta [NO_ANALISIS], responde solo con guía breve y NO hagas análisis.\n"
+            "4) Si mencionas NOI, se refiere SIEMPRE a 'Ingreso Neto Operativo' (Net Operating Income).\n"
+            "5) No inventes definiciones creativas para siglas. Si no están definidas en las tablas, indica que no están definidas.\n"
+            "6) Explica únicamente lo que se desprende del resultado y del código ejecutado.\n"
         ),
     }
 
@@ -1026,7 +918,7 @@ def explain_result(question: str, code: str, result_preview: str) -> str:
             f"Código de pandas que se ejecutó sobre el diccionario 'tables':\n{code}\n\n"
             f"Resultado (vista previa en texto, puede estar truncada):\n{result_preview}\n\n"
             "Con base en esto, explica el resultado al usuario en español, usando correctamente "
-            "los conceptos financieros y sin inventar significados de acrónimos."
+            "los conceptos y sin inventar significados de acrónimos."
         ),
     }
 
@@ -1034,29 +926,34 @@ def explain_result(question: str, code: str, result_preview: str) -> str:
     return answer.strip()
 
 
-# ---------- MODELOS ----------
+# =========================
+# Pydantic models
+# =========================
 
 class AskRequest(BaseModel):
     question: str
 
+
 class AskResponse(BaseModel):
     answer: str
+
 
 class DatasetInfo(BaseModel):
     id: str
     filename: str
     ext: str
 
+
 class ChatRequest(BaseModel):
     query: str
     dataset_id: Optional[str] = None
 
-from datetime import datetime
+
+# =========================
+# HTML helpers
+# =========================
 
 def error_card_html(title: str, bullets: List[str], trace: Optional[str] = None) -> str:
-    """
-    Devuelve un bloque HTML sencillo para mostrar errores en el chat (UI).
-    """
     items = "".join(f"<li>{html.escape(str(b))}</li>" for b in bullets)
     trace_html = (
         f"<div style='margin-top:8px; font-size:12px; color:#6b7280;'>"
@@ -1077,9 +974,6 @@ def error_card_html(title: str, bullets: List[str], trace: Optional[str] = None)
 
 
 def wrap_with_trace_html(answer_html: str, *, dataset_id: str, dataset_name: str, user_email: Optional[str]) -> str:
-    """
-    Agrega un footer de trazabilidad a una respuesta HTML (sin modificar el contenido principal).
-    """
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     ue = user_email or "N/D"
     trace = f"Fuente: {dataset_name} | dataset_id: {dataset_id} | Usuario: {ue} | {ts}"
@@ -1092,26 +986,23 @@ def wrap_with_trace_html(answer_html: str, *, dataset_id: str, dataset_name: str
     )
 
 
-# ---------- ENDPOINTS ----------
+# =========================
+# Endpoints
+# =========================
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "render_git_commit": os.environ.get("RENDER_GIT_COMMIT"),
+        "env": os.environ.get("ENVIRONMENT"),
+    }
 
 
 @app.get("/datasets", response_model=List[DatasetInfo])
-def list_datasets():
-    """
-    Lista datasets disponibles desde Google Drive (DATASETS_SPREADSHEETS).
-    Se usa para poblar el selector del frontend.
-    """
+def list_datasets(_auth: None = Depends(require_auth)):
     items: List[DatasetInfo] = []
-
     for dataset_id, cfg in DATASETS_SPREADSHEETS.items():
-        # Para mantener tu modelo DatasetInfo sin romper UI:
-        # - id: dataset_id (ej. "noi_inmuebles")
-        # - filename: nombre legible (cfg["name"])
-        # - ext: "drive" (solo para identificarlo)
         items.append(
             DatasetInfo(
                 id=dataset_id,
@@ -1119,7 +1010,6 @@ def list_datasets():
                 ext="drive",
             )
         )
-
     return items
 
 
@@ -1134,27 +1024,16 @@ async def upload_excel(
             detail="Endpoint deshabilitado. Usa datasets desde Google Drive (selector).",
         )
 
-
-    """
-    Sube un nuevo archivo Excel con múltiples hojas.
-    Reemplaza tables_global (modo antiguo).
-    """
     global tables_global
     contents = await file.read()
     tables_global = pd.read_excel(io.BytesIO(contents), sheet_name=None)
 
     summary = {
-        name: {
-            "rows": len(df),
-            "columns": list(df.columns),
-        }
+        name: {"rows": len(df), "columns": list(df.columns)}
         for name, df in tables_global.items()
     }
 
-    return {
-        "message": "Archivo cargado. Tablas actualizadas.",
-        "sheets": summary,
-    }
+    return {"message": "Archivo cargado. Tablas actualizadas.", "sheets": summary}
 
 
 @app.post("/ask", response_model=AskResponse)
@@ -1166,7 +1045,6 @@ def ask(
         return AskResponse(
             answer="Este endpoint ya no se usa en producción. Selecciona un dataset de Google Drive y consulta por /ask/{dataset_id}."
         )
-
 
     global tables_global
     if not tables_global:
@@ -1180,24 +1058,20 @@ def ask(
         return AskResponse(answer=f"Error generando código: {e}")
 
     safe_globals = {
-    "pd": pd,
-    "smart_filter": smart_filter,
-    "best_match": best_match,
-}
+        "pd": pd,
+        "smart_filter": smart_filter,
+        "best_match": best_match,
+    }
     safe_locals = {"tables": {name: df.copy() for name, df in tables_global.items()}}
 
     try:
         exec(code, safe_globals, safe_locals)
         result = safe_locals.get("result")
     except Exception as e:
-        return AskResponse(
-            answer=f"Error ejecutando código generado:\n{e}\n\nCódigo generado:\n{code}"
-        )
+        return AskResponse(answer=f"Error ejecutando código generado:\n{e}\n\nCódigo generado:\n{code}")
 
     if result is None:
-        return AskResponse(
-            answer=f"No se generó la variable 'result'. Código generado:\n{code}"
-        )
+        return AskResponse(answer=f"No se generó la variable 'result'. Código generado:\n{code}")
 
     try:
         if isinstance(result, pd.DataFrame):
@@ -1208,6 +1082,14 @@ def ask(
             preview_text = f"Serie ({len(result)} elementos):\n{preview}"
         else:
             preview_text = f"Resultado ({type(result).__name__}): {result}"
+
+        # Etiqueta para evitar interpretaciones cuando NO hubo análisis real
+        if isinstance(result, str):
+            low = result.strip().lower()
+            saludos = {"hola", "hi", "hello", "buenas", "buen día", "buen dia", "gracias", "ok", "vale"}
+            if (low in saludos) or ("no hay datos" in low) or ("no se realiz" in low) or ("saludo" in low):
+                preview_text = "[NO_ANALISIS]\n" + preview_text
+
     except Exception:
         preview_text = repr(result)
 
@@ -1229,13 +1111,10 @@ def ask_on_dataset(
     http_request: Request,
     _auth: None = Depends(require_auth),
 ):
-
     try:
         tables = load_tables_from_drive_dataset(dataset_id)
     except Exception as e:
-        return AskResponse(
-            answer=f"No se pudo cargar el dataset '{dataset_id}': {e}"
-        )
+        return AskResponse(answer=f"No se pudo cargar el dataset '{dataset_id}': {e}")
 
     question = ask.question
 
@@ -1248,21 +1127,17 @@ def ask_on_dataset(
         "pd": pd,
         "smart_filter": smart_filter,
         "best_match": best_match,
-}
+    }
     safe_locals = {"tables": {name: df.copy() for name, df in tables.items()}}
 
     try:
         exec(code, safe_globals, safe_locals)
         result = safe_locals.get("result")
     except Exception as e:
-        return AskResponse(
-            answer=f"Error ejecutando código generado:\n{e}\n\nCódigo generado:\n{code}"
-        )
+        return AskResponse(answer=f"Error ejecutando código generado:\n{e}\n\nCódigo generado:\n{code}")
 
     if result is None:
-        return AskResponse(
-            answer=f"No se generó la variable 'result'. Código generado:\n{code}"
-        )
+        return AskResponse(answer=f"No se generó la variable 'result'. Código generado:\n{code}")
 
     try:
         if isinstance(result, pd.DataFrame):
@@ -1273,6 +1148,13 @@ def ask_on_dataset(
             preview_text = f"Serie ({len(result)} elementos):\n{preview}"
         else:
             preview_text = f"Resultado ({type(result).__name__}): {result}"
+
+        if isinstance(result, str):
+            low = result.strip().lower()
+            saludos = {"hola", "hi", "hello", "buenas", "buen día", "buen dia", "gracias", "ok", "vale"}
+            if (low in saludos) or ("no hay datos" in low) or ("no se realiz" in low) or ("saludo" in low):
+                preview_text = "[NO_ANALISIS]\n" + preview_text
+
     except Exception:
         preview_text = repr(result)
 
@@ -1303,9 +1185,36 @@ def chat(
     http_request: Request,
     _auth: None = Depends(require_auth),
 ):
-    ask_request = AskRequest(question=payload.query)
+    q_raw = (payload.query or "").strip()
+    q = _norm_text(q_raw)
 
-    # 1) Validación: dataset requerido
+    GREETINGS = {
+        "hola", "hi", "hello", "buenas", "buenos dias", "buenas tardes", "buenas noches",
+        "que tal", "qué tal", "como estas", "cómo estás", "gracias", "ok", "vale"
+    }
+
+    # A) saludo exacto
+    if q in GREETINGS:
+        return AskResponse(
+            answer=(
+                "Hola. Para ayudarte, haz una consulta específica.\n"
+                "Ejemplos:\n"
+                "• “NOI de Manacar enero 2025”\n"
+                "• “Top 10 inmuebles por NOI 2025”\n"
+                "• “Información de Alexis Valenzuela”"
+            )
+        )
+
+    # B) demasiado corto/genérico (1-2 palabras sin números)
+    if len(q.split()) <= 2 and not any(ch.isdigit() for ch in q_raw):
+        return AskResponse(
+            answer=(
+                "Para poder analizar, necesito una pregunta más concreta.\n"
+                "Indica qué métrica/persona/inmueble/periodo quieres revisar."
+            )
+        )
+
+    # dataset requerido
     if not payload.dataset_id:
         return AskResponse(
             answer=error_card_html(
@@ -1318,7 +1227,7 @@ def chat(
             )
         )
 
-    # 2) Validación: dataset_id permitido (debe existir en DATASETS_SPREADSHEETS)
+    # dataset permitido
     if payload.dataset_id not in DATASETS_SPREADSHEETS:
         return AskResponse(
             answer=error_card_html(
@@ -1331,6 +1240,6 @@ def chat(
             )
         )
 
-    # 3) Flujo normal
+    ask_request = AskRequest(question=payload.query)
     return ask_on_dataset(payload.dataset_id, ask_request, http_request=http_request)
 
