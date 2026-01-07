@@ -1004,6 +1004,39 @@ def dataframe_to_html_table(df: pd.DataFrame, title: str = "Tabla de resultados"
             "<div>No hay filas para mostrar.</div>"
         )
 
+    df_show = df.copy()
+
+    # 1) Formatear columna "Mes" si existe
+    if "Mes" in df_show.columns:
+        df_show["Mes"] = pd.to_datetime(df_show["Mes"], errors="coerce")
+        meses_es = {
+            1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
+            7: "Jul", 8: "Ago", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"
+        }
+        def fmt_mes(x):
+            if pd.isna(x):
+                return ""
+            return f"{meses_es.get(x.month, x.month)} {x.year}"
+        df_show["Mes"] = df_show["Mes"].map(fmt_mes)
+
+    # 2) Formatear moneda en columnas típicas (NOI, GOP, Presupuesto, Renta, etc.)
+    def _is_money_col(c: str) -> bool:
+        c = str(c).lower()
+        return any(k in c for k in ["noi", "gop", "presupuesto", "budget", "renta", "ingreso", "costo", "opex", "capex", "monto", "mxn", "usd"])
+
+    money_cols = [c for c in df_show.columns if _is_money_col(c)]
+
+    def fmt_money(v):
+        try:
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return ""
+            return f"${float(v):,.0f}"
+        except Exception:
+            return str(v)
+
+    for c in money_cols:
+        df_show[c] = df_show[c].map(fmt_money)
+    
     df_show = df.head(max_rows).copy()
 
     # Construimos HTML manual para evitar estilos extraños y mantener control
