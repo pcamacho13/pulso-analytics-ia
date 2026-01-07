@@ -993,6 +993,54 @@ def wrap_with_trace_html(answer_html: str, *, dataset_id: str, dataset_name: str
         f"</div>"
     )
 
+def dataframe_to_html_table(df: pd.DataFrame, title: str = "Tabla de resultados", max_rows: int = 25) -> str:
+    """
+    Convierte un DataFrame en una tabla HTML simple (con encabezados),
+    limitada a max_rows para que el chat no se vuelva enorme.
+    """
+    if df is None or df.empty:
+        return (
+            f"<div style='font-weight:700; margin-bottom:6px;'>{html.escape(title)}</div>"
+            "<div>No hay filas para mostrar.</div>"
+        )
+
+    df_show = df.head(max_rows).copy()
+
+    # Construimos HTML manual para evitar estilos extraños y mantener control
+    headers = "".join(f"<th style='text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;'>{html.escape(str(c))}</th>"
+                      for c in df_show.columns)
+
+    rows_html = []
+    for _, row in df_show.iterrows():
+        tds = "".join(
+            f"<td style='padding:8px; border-bottom:1px solid #f3f4f6; vertical-align:top;'>{html.escape(str(v))}</td>"
+            for v in row.tolist()
+        )
+        rows_html.append(f"<tr>{tds}</tr>")
+
+    rows = "".join(rows_html)
+
+    note = ""
+    if len(df) > max_rows:
+        note = f"<div style='margin-top:6px; font-size:12px; color:#6b7280;'>Mostrando {max_rows} de {len(df)} filas.</div>"
+
+    return f"""
+    <div style="max-width:100%;">
+      <div style="font-weight:700; font-size:1.05rem; margin-bottom:8px;">{html.escape(title)}</div>
+      <div style="overflow:auto; border:1px solid #e5e7eb; border-radius:12px; background:#ffffff;">
+        <table style="border-collapse:collapse; width:100%; font-size:14px;">
+          <thead style="background:#f9fafb;">
+            <tr>{headers}</tr>
+          </thead>
+          <tbody>
+            {rows}
+          </tbody>
+        </table>
+      </div>
+      {note}
+    </div>
+    """.strip()
+
 
 # =========================
 # Endpoints
@@ -1166,25 +1214,29 @@ def ask_on_dataset(
     except Exception:
         preview_text = repr(result)
 
-    try:
-        explanation = explain_result(question, code, preview_text)
-    except Exception as e:
-        explanation = (
-            f"El análisis se ejecutó bien, pero hubo un error al generar la explicación: {e}\n\n"
-            f"Vista previa del resultado:\n{preview_text}"
-        )
+    # Si el resultado es DataFrame, respondemos con tabla HTML directa (sin LLM)
+    if isinstance(result, pd.DataFrame):
+        answer_html = dataframe_to_html_table(result, title="Tabla de resultados")
+    else:
+        try:
+            answer_html = explain_result(question, code, preview_text)
+        except Exception as e:
+            answer_html = (
+                f"<div><b>Error generando explicación:</b> {html.escape(str(e))}</div>"
+                f"<pre style='white-space:pre-wrap; font-size:12px; color:#374151;'>{html.escape(preview_text)}</pre>"
+            )
 
     dataset_name = DATASETS_SPREADSHEETS.get(dataset_id, {}).get("name", dataset_id)
     user_email = http_request.session.get("user_email") if hasattr(http_request, "session") else None
 
     return AskResponse(
-        answer=wrap_with_trace_html(
-            explanation,
-            dataset_id=dataset_id,
-            dataset_name=dataset_name,
-            user_email=user_email,
-        )
+    answer=wrap_with_trace_html(
+        answer_html,
+        dataset_id=dataset_id,
+        dataset_name=dataset_name,
+        user_email=user_email,
     )
+)
 
 
 @app.post("/chat", response_model=AskResponse)
