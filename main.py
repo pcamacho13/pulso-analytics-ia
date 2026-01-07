@@ -1230,13 +1230,13 @@ def ask_on_dataset(
     user_email = http_request.session.get("user_email") if hasattr(http_request, "session") else None
 
     return AskResponse(
-    answer=wrap_with_trace_html(
-        answer_html,
-        dataset_id=dataset_id,
-        dataset_name=dataset_name,
-        user_email=user_email,
+        answer=wrap_with_trace_html(
+            explanation,
+            dataset_id=dataset_id,
+            dataset_name=dataset_name,
+            user_email=user_email,
+        )
     )
-)
 
 
 @app.post("/chat", response_model=AskResponse)
@@ -1258,7 +1258,6 @@ def chat(
         print(f"[CHAT] BRANCH=GREETINGS q_raw={q_raw!r} q_norm={q!r} dataset_id={payload.dataset_id!r}")
         return AskResponse(
             answer=(
-                "[BRANCH:GREETINGS]\n"
                 "Hola. Para ayudarte, selecciona un dataset y haz una consulta específica.\n"
                 "Ejemplos:\n"
                 "• “NOI de Manacar enero 2025”\n"
